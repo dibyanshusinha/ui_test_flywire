@@ -1,0 +1,113 @@
+name: Push Build
+
+on:
+  push:
+    branches:
+      - develop
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [24.x]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Run build
+        run: npm run build
+
+      - name: Run Unit Tests with coverage
+        run: npm run test:coverage
+
+      - name: Run E2E tests with coverage
+        run: npm run e2e:coverage
+
+      - name: Find associated PR
+        id: find-pr
+        run: |
+          PR=$(gh pr list --head "${{ github.ref_name }}" --state open --json number --jq '.[0].number // empty')
+          echo "number=$PR" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment Unit Test coverage on PR
+        if: steps.find-pr.outputs.number != ''
+        run: |
+          node -e "
+            const fs = require('fs');
+            const lcov = fs.readFileSync('./coverage/lcov.info', 'utf8');
+            const lines = lcov.split('\n');
+            let lf=0,lh=0,bf=0,bh=0,ff=0,fh=0;
+            for (const l of lines) {
+              if (l.startsWith('LF:')) lf+=+l.slice(3);
+              else if (l.startsWith('LH:')) lh+=+l.slice(3);
+              else if (l.startsWith('BRF:')) bf+=+l.slice(4);
+              else if (l.startsWith('BRH:')) bh+=+l.slice(4);
+              else if (l.startsWith('FNF:')) ff+=+l.slice(4);
+              else if (l.startsWith('FNH:')) fh+=+l.slice(4);
+            }
+            const pct = (h, f) => f ? ((h/f)*100).toFixed(1)+'%' : 'N/A';
+            const report = [
+              '## Unit Test Coverage Report',
+              '| Type | Hit | Total | Coverage |',
+              '|------|-----|-------|----------|',
+              '| Lines | '+lh+' | '+lf+' | '+pct(lh,lf)+' |',
+              '| Branches | '+bh+' | '+bf+' | '+pct(bh,bf)+' |',
+              '| Functions | '+fh+' | '+ff+' | '+pct(fh,ff)+' |',
+            ].join('\n');
+            fs.writeFileSync('/tmp/ut-coverage.md', report);
+          "
+          gh pr comment ${{ steps.find-pr.outputs.number }} --body-file /tmp/ut-coverage.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment E2E coverage on PR
+        if: steps.find-pr.outputs.number != ''
+        run: |
+          node -e "
+            const fs = require('fs');
+            const lcov = fs.readFileSync('./coverage/e2e/lcov.info', 'utf8');
+            const lines = lcov.split('\n');
+            let lf=0,lh=0,bf=0,bh=0,ff=0,fh=0;
+            for (const l of lines) {
+              if (l.startsWith('LF:')) lf+=+l.slice(3);
+              else if (l.startsWith('LH:')) lh+=+l.slice(3);
+              else if (l.startsWith('BRF:')) bf+=+l.slice(4);
+              else if (l.startsWith('BRH:')) bh+=+l.slice(4);
+              else if (l.startsWith('FNF:')) ff+=+l.slice(4);
+              else if (l.startsWith('FNH:')) fh+=+l.slice(4);
+            }
+            const pct = (h, f) => f ? ((h/f)*100).toFixed(1)+'%' : 'N/A';
+            const report = [
+              '## E2E Coverage Report',
+              '| Type | Hit | Total | Coverage |',
+              '|------|-----|-------|----------|',
+              '| Lines | '+lh+' | '+lf+' | '+pct(lh,lf)+' |',
+              '| Branches | '+bh+' | '+bf+' | '+pct(bh,bf)+' |',
+              '| Functions | '+fh+' | '+ff+' | '+pct(fh,ff)+' |',
+            ].join('\n');
+            fs.writeFileSync('/tmp/e2e-coverage.md', report);
+          "
+          gh pr comment ${{ steps.find-pr.outputs.number }} --body-file /tmp/e2e-coverage.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
