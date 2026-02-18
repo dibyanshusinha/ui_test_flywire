@@ -1,0 +1,10 @@
+{
+	"name": "flywire-frontend-challenge",
+	"private": true,
+	"version": "1.0.0",
+	"scripts": {
+		"start": "echo \"Implement me!\"",
+		"test": "echo \"Implement me!\"",
+		"build": "echo \"Implement me!\""
+	}
+}
