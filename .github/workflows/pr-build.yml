@@ -1,0 +1,63 @@
+name: PR Build
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+# Cancel in-progress run on the same PR when a new push comes in
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build:
+    # Skip PRs where main is the source (main → * should never happen in this flow)
+    if: github.head_ref != 'main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run build
+        run: npm run build
+
+      - name: Run Unit Tests with coverage
+        run: npm run test:coverage
+
+      # Trigger is always pull_request — no event_name guard needed
+      - name: Comment Unit Test coverage on PR
+        uses: romeovs/lcov-reporter-action@v0.3.1
+        with:
+          lcov-file: ./coverage/lcov.info
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          title: 'Unit Test Coverage Report'
+
+      - name: Run E2E tests with coverage
+        run: npm run e2e:coverage
+
+      - name: Comment E2E coverage on PR
+        uses: romeovs/lcov-reporter-action@v0.3.1
+        with:
+          lcov-file: ./coverage/e2e/lcov.info
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          title: 'E2E Coverage Report'
