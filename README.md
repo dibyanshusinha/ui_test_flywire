@@ -223,7 +223,7 @@ We extract the numeric ID with: `url.split('/').filter(Boolean).pop()`
 - **Evolution chain sprites:** `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/{id}.png` (derived from species URL ID to avoid extra fetch)
 
 ### Evolution Chain Flattening
-The evolution chain is a recursive tree. We traverse only the first `evolves_to[0]` path (linear chains). Branching evolutions (e.g., Eevee) show only the first branch. This covers ~95% of Pokémon correctly and keeps the component simple.
+The evolution chain is a recursive tree. We traverse only the first `evolves_to[0]` path (linear chains). Branching evolutions (e.g., Eevee) show only the first branch.
 
 ### Move Type Fetching
 Moves are paginated within the detail view (20 per page). Each `MoveItem` component calls its own `useQuery(['move', id])`. TanStack Query deduplicates and caches move data globally, so a move type fetched for one Pokémon is immediately available for another. This is the simplest approach that satisfies the wireframe without introducing a local lookup table.
