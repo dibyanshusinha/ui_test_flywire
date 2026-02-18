@@ -1,13 +1,20 @@
 name: Push Build
 
+# Fires after every rebase merge into main
+# Final verification that main is always green after merge
+
 on:
   push:
     branches:
-      - develop
+      - main
+
+# Cancel in-progress run if another push comes in before this finishes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   build:
@@ -37,73 +44,3 @@ jobs:
 
       - name: Run E2E tests with coverage
         run: npm run e2e:coverage
-
-      - name: Find associated PR
-        id: find-pr
-        run: |
-          PR=$(gh pr list --head "${{ github.ref_name }}" --state open --json number --jq '.[0].number // empty')
-          echo "number=$PR" >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Comment Unit Test coverage on PR
-        if: steps.find-pr.outputs.number != ''
-        run: |
-          node -e "
-            const fs = require('fs');
-            const lcov = fs.readFileSync('./coverage/lcov.info', 'utf8');
-            const lines = lcov.split('\n');
-            let lf=0,lh=0,bf=0,bh=0,ff=0,fh=0;
-            for (const l of lines) {
-              if (l.startsWith('LF:')) lf+=+l.slice(3);
-              else if (l.startsWith('LH:')) lh+=+l.slice(3);
-              else if (l.startsWith('BRF:')) bf+=+l.slice(4);
-              else if (l.startsWith('BRH:')) bh+=+l.slice(4);
-              else if (l.startsWith('FNF:')) ff+=+l.slice(4);
-              else if (l.startsWith('FNH:')) fh+=+l.slice(4);
-            }
-            const pct = (h, f) => f ? ((h/f)*100).toFixed(1)+'%' : 'N/A';
-            const report = [
-              '## Unit Test Coverage Report',
-              '| Type | Hit | Total | Coverage |',
-              '|------|-----|-------|----------|',
-              '| Lines | '+lh+' | '+lf+' | '+pct(lh,lf)+' |',
-              '| Branches | '+bh+' | '+bf+' | '+pct(bh,bf)+' |',
-              '| Functions | '+fh+' | '+ff+' | '+pct(fh,ff)+' |',
-            ].join('\n');
-            fs.writeFileSync('/tmp/ut-coverage.md', report);
-          "
-          gh pr comment ${{ steps.find-pr.outputs.number }} --body-file /tmp/ut-coverage.md
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Comment E2E coverage on PR
-        if: steps.find-pr.outputs.number != ''
-        run: |
-          node -e "
-            const fs = require('fs');
-            const lcov = fs.readFileSync('./coverage/e2e/lcov.info', 'utf8');
-            const lines = lcov.split('\n');
-            let lf=0,lh=0,bf=0,bh=0,ff=0,fh=0;
-            for (const l of lines) {
-              if (l.startsWith('LF:')) lf+=+l.slice(3);
-              else if (l.startsWith('LH:')) lh+=+l.slice(3);
-              else if (l.startsWith('BRF:')) bf+=+l.slice(4);
-              else if (l.startsWith('BRH:')) bh+=+l.slice(4);
-              else if (l.startsWith('FNF:')) ff+=+l.slice(4);
-              else if (l.startsWith('FNH:')) fh+=+l.slice(4);
-            }
-            const pct = (h, f) => f ? ((h/f)*100).toFixed(1)+'%' : 'N/A';
-            const report = [
-              '## E2E Coverage Report',
-              '| Type | Hit | Total | Coverage |',
-              '|------|-----|-------|----------|',
-              '| Lines | '+lh+' | '+lf+' | '+pct(lh,lf)+' |',
-              '| Branches | '+bh+' | '+bf+' | '+pct(bh,bf)+' |',
-              '| Functions | '+fh+' | '+ff+' | '+pct(fh,ff)+' |',
-            ].join('\n');
-            fs.writeFileSync('/tmp/e2e-coverage.md', report);
-          "
-          gh pr comment ${{ steps.find-pr.outputs.number }} --body-file /tmp/e2e-coverage.md
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

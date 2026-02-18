@@ -10,13 +10,19 @@ on:
       - synchronize
       - reopened
 
+# Cancel in-progress run on the same PR when a new push comes in
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
   build:
-    if: github.head_ref != 'develop' && github.head_ref != 'main'
+    # Skip PRs where main is the source (main → * should never happen in this flow)
+    if: github.head_ref != 'main'
     runs-on: ubuntu-latest
 
     steps:
@@ -41,8 +47,8 @@ jobs:
       - name: Run Unit Tests with coverage
         run: npm run test:coverage
 
+      # Trigger is always pull_request — no event_name guard needed
       - name: Comment Unit Test coverage on PR
-        if: github.event_name == 'pull_request'
         uses: romeovs/lcov-reporter-action@v0.3.1
         with:
           lcov-file: ./coverage/lcov.info
@@ -53,7 +59,6 @@ jobs:
         run: npm run e2e:coverage
 
       - name: Comment E2E coverage on PR
-        if: github.event_name == 'pull_request'
         uses: romeovs/lcov-reporter-action@v0.3.1
         with:
           lcov-file: ./coverage/e2e/lcov.info
