@@ -1,0 +1,17 @@
+// This will enable code coverage tracking for Cypress E2E tests
+import '@cypress/code-coverage/support';
+
+// Custom commands for Pokemon Explorer
+Cypress.Commands.add('navigateToPokemonTable', () => {
+    cy.visit('/');
+    cy.get('h1').should('contain', 'Pokémon Collection');
+});
+
+Cypress.Commands.add('searchPokemon', (name) => {
+    cy.get('input[aria-label="Search Pokémon by name"]').type(name);
+});
+
+Cypress.Commands.add('navigateToPokemonDetail', (pokemonName) => {
+    cy.get('table').contains(pokemonName).click();
+    cy.url().should('include', '/pokemon/');
+});

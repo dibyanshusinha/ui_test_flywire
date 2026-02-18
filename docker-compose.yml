@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_NODE_VERSION: ${BUILD_NODE_VERSION}
+    container_name: ${CONTAINER_NAME}
+    image: ${IMAGE_NAME}:${IMAGE_TAG}
+    ports:
+      - "${APP_PORT}:${APP_PORT}"
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - APP_PORT=${APP_PORT}
+      - LOG_LEVEL=${LOG_LEVEL}
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:${APP_PORT}', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"]
+      interval: ${HEALTHCHECK_INTERVAL}s
+      timeout: ${HEALTHCHECK_TIMEOUT}s
+      retries: ${HEALTHCHECK_RETRIES}
+      start_period: ${HEALTHCHECK_START_PERIOD}s
+    networks:
+      - pokemon-network
+
+networks:
+  pokemon-network:
+    driver: bridge

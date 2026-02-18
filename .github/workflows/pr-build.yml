@@ -1,0 +1,60 @@
+name: PR Build
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [24.x]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Run build
+        run: npm run build
+
+      - name: Run Unit Tests with coverage
+        run: npm run test:coverage
+
+      - name: Comment Unit Test coverage on PR
+        if: always()
+        uses: romeovs/lcov-reporter-action@v0.3.1
+        with:
+          lcov-file: ./coverage/lcov.info
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          title: 'Unit Test Coverage Report'
+
+      - name: Run E2E tests with coverage
+        run: npm run e2e:coverage
+
+      - name: Comment E2E coverage on PR
+        if: always()
+        uses: romeovs/lcov-reporter-action@v0.3.1
+        with:
+          lcov-file: ./coverage/e2e/lcov.info
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          title: 'E2E Coverage Report'
