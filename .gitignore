@@ -1,0 +1,39 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+coverage
+.nyc_output
+
+# Cypress
+cypress/videos
+cypress/screenshots
+.cypress_output
+
+# AI IDE and AI Code Review
+.idea
+.vscode
+*.code-workspace
+.claude
+
+# Husky
+.husky/_
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
