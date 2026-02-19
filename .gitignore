@@ -30,6 +30,9 @@ cypress/screenshots
 *.code-workspace
 .claude
 
+# Husky
+.husky/_
+
 # OS generated files
 .DS_Store
 Thumbs.db
