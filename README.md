@@ -112,35 +112,7 @@ When you're done, open a pull request against this repo. Please include a brief 
 **Good luck!**
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Notes:
-______________________________________________________________________________________
-
-
+# Notes and Decisions:
 A small SPA with two distinct views (Table and Detail) and shared data-fetching logic. We need a maintainable structure that separates concerns cleanly.
 
 ## File Structure
