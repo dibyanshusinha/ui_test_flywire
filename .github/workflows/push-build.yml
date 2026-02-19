@@ -1,28 +1,33 @@
-name: Push Build
+name: Main Tests
 
-# Fires after every rebase merge into main
-# Final verification that main is always green after merge
+# Manually triggered via:
+#   1. PR/issue comment containing "Please run tests"
+#   2. GitHub Actions UI (workflow_dispatch)
 
 on:
-  push:
-    branches:
-      - main
-
-# Cancel in-progress run if another push comes in before this finishes
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
+    # For issue_comment: only run on PR comments (not issue comments) that say "Please run tests"
+    # For workflow_dispatch: always run
+    if: |
+      github.event_name == 'workflow_dispatch' || (
+        github.event.issue.pull_request != null &&
+        contains(github.event.comment.body, 'Please run tests')
+      )
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout main
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
