@@ -225,3 +225,4 @@ Moves are paginated within the detail view (20 per page). Each `MoveItem` compon
 All queries use `staleTime: 24 * 60 * 60 * 1000` (24h) matching PokeAPI's own `Cache-Control: public, max-age=86400` header. This means repeated navigation never re-fetches within a session.
 
 
+
