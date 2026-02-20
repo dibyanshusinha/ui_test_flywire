@@ -1,7 +1,7 @@
 name: Main Tests
 
 # Manually triggered via:
-#   1. PR/issue comment containing "Please run tests"
+#   1. PR/issue comment containing "Please run tests" — by repo members only
 #   2. GitHub Actions UI (workflow_dispatch)
 
 on:
@@ -14,23 +14,28 @@ permissions:
 
 jobs:
   build:
-    # For issue_comment: only run on PR comments (not issue comments) that say "Please run tests"
+    # For issue_comment:
+    #   - Only run on PR comments (not plain issue comments)
+    #   - Comment must contain the trigger phrase
+    #   - Commenter must be a repo member, collaborator, or owner (prevents
+    #     any external user from burning CI minutes by commenting on a public repo)
     # For workflow_dispatch: always run
     if: |
       github.event_name == 'workflow_dispatch' || (
         github.event.issue.pull_request != null &&
-        contains(github.event.comment.body, 'Please run tests')
+        contains(github.event.comment.body, 'Please run tests') &&
+        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
       )
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: main
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.x
           cache: 'npm'

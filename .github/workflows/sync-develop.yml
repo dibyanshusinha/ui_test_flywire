@@ -11,6 +11,114 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      # ── Step 1: Detect if develop has commits that main doesn't ──────────
+      # If so, the force-reset in Step 3 would silently destroy that work.
+      # We capture the develop SHA now (before the reset) for use in Step 2.
+      - name: Check if develop is ahead of main
+        id: check_ahead
+        run: |
+          DEVELOP_SHA=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.SYNC_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/git/refs/heads/develop \
+            | jq -r '.object.sha')
+
+          MAIN_SHA="${{ github.sha }}"
+
+          if [ -z "$DEVELOP_SHA" ] || [ "$DEVELOP_SHA" = "null" ]; then
+            echo "::warning::Could not read develop SHA — skipping rescue tag"
+            echo "develop_is_ahead=false" >> $GITHUB_OUTPUT
+          elif [ "$DEVELOP_SHA" = "$MAIN_SHA" ]; then
+            echo "develop is already at main — no rescue needed"
+            echo "develop_is_ahead=false" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::develop ($DEVELOP_SHA) is ahead of main ($MAIN_SHA) — creating rescue tag before sync"
+            echo "develop_is_ahead=true" >> $GITHUB_OUTPUT
+            echo "develop_sha=$DEVELOP_SHA" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Step 2: Rescue orphaned commits (only when develop is ahead) ─────
+      # Creates an annotated tag pointing to the develop HEAD that is about
+      # to be overwritten. Work is never truly lost — it can be recovered via:
+      #   git fetch origin && git checkout rescue/develop-<date>-<sha>
+      # This step is best-effort: failures log a warning but never block Step 3.
+      - name: Rescue orphaned develop commits
+        if: steps.check_ahead.outputs.develop_is_ahead == 'true'
+        run: |
+          DEVELOP_SHA="${{ steps.check_ahead.outputs.develop_sha }}"
+          MAIN_SHA="${{ github.sha }}"
+          SHORT_SHA="${DEVELOP_SHA:0:7}"
+          RESCUE_DATE=$(date -u +%Y-%m-%d)
+          TAG_NAME="rescue/develop-${RESCUE_DATE}-${SHORT_SHA}"
+          TAGGER_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          TRIGGER_MSG="${{ github.event.head_commit.message }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          TAG_MESSAGE="RESCUED: develop was ahead of main before sync\n\ndevelop SHA:  ${DEVELOP_SHA}\nmain SHA:     ${MAIN_SHA}\nRescue date:  ${RESCUE_DATE}\nTriggered by: ${TRIGGER_MSG}\nWorkflow run: ${RUN_URL}\n\nThese commits were about to be orphaned by sync-develop.yml.\nRecover them: git fetch origin && git checkout ${TAG_NAME}"
+
+          # Call 1: Create the annotated tag object
+          TAG_OBJ_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${{ secrets.SYNC_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/${{ github.repository }}/git/tags \
+            -d "{
+              \"tag\": \"${TAG_NAME}\",
+              \"message\": \"${TAG_MESSAGE}\",
+              \"object\": \"${DEVELOP_SHA}\",
+              \"type\": \"commit\",
+              \"tagger\": {
+                \"name\": \"github-actions[bot]\",
+                \"email\": \"github-actions[bot]@users.noreply.github.com\",
+                \"date\": \"${TAGGER_DATE}\"
+              }
+            }")
+
+          TAG_OBJ_CODE=$(echo "$TAG_OBJ_RESPONSE" | tail -1)
+          TAG_OBJ_BODY=$(echo "$TAG_OBJ_RESPONSE" | head -1)
+
+          if [ "$TAG_OBJ_CODE" -lt 200 ] || [ "$TAG_OBJ_CODE" -ge 300 ]; then
+            echo "::warning::Failed to create rescue tag object (HTTP $TAG_OBJ_CODE): $TAG_OBJ_BODY"
+            exit 0
+          fi
+
+          TAG_OBJ_SHA=$(echo "$TAG_OBJ_BODY" | jq -r '.sha')
+
+          # Call 2: Create the tag ref pointing at the tag object
+          REF_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${{ secrets.SYNC_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/${{ github.repository }}/git/refs \
+            -d "{\"ref\": \"refs/tags/${TAG_NAME}\", \"sha\": \"${TAG_OBJ_SHA}\"}")
+
+          REF_CODE=$(echo "$REF_RESPONSE" | tail -1)
+          REF_BODY=$(echo "$REF_RESPONSE" | head -1)
+
+          if [ "$REF_CODE" = "422" ]; then
+            echo "Rescue tag ${TAG_NAME} already exists — continuing"
+          elif [ "$REF_CODE" -lt 200 ] || [ "$REF_CODE" -ge 300 ]; then
+            echo "::warning::Failed to create rescue tag ref (HTTP $REF_CODE): $REF_BODY"
+            exit 0
+          else
+            echo "Rescue tag created: ${TAG_NAME}"
+          fi
+
+          # Job summary
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          ## ⚠️ Rescue Tag Created
+
+          \`develop\` was ahead of \`main\` before this sync. Orphaned commits have been preserved.
+
+          **Tag:** \`${TAG_NAME}\`
+          **Develop SHA:** \`${DEVELOP_SHA}\`
+          **Main SHA (new):** \`${MAIN_SHA}\`
+          **Triggered by:** ${TRIGGER_MSG}
+
+          **To recover:** \`git fetch origin && git checkout ${TAG_NAME}\`
+          EOF
+
+      # ── Step 3: Force-reset develop to match main (always runs) ──────────
       - name: Reset develop to main
         run: |
           RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
