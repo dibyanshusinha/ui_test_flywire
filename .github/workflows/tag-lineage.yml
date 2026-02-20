@@ -1,0 +1,295 @@
+name: Tag PR Lineage
+
+# Runs on every push to main.
+# Creates a GitHub Release (and its underlying tag) capturing:
+#   - Auto-generated release notes from merged PR titles (GitHub native)
+#   - Which develop→main PR triggered this push
+#   - Which feature PRs are included
+#   - The CI build run that validated the PR
+#
+# Releases appear in the GitHub Releases tab and are visible to all contributors.
+# Rollbacks are marked as pre-releases so they don't surface as "latest".
+#
+# Usage:
+#   GitHub UI → Releases tab → filter by "lineage/main-*"
+#   git fetch --tags && git tag -l "lineage/main-*"
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      is_revert: ${{ steps.create.outputs.is_revert }}
+
+    steps:
+      - name: Create GitHub Release with lineage
+        id: create
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.SYNC_TOKEN }}
+          script: |
+            const before   = context.payload.before;
+            const after    = context.payload.after;
+            const repo     = context.repo;
+            const shortSha = after.substring(0, 7);
+            const today    = new Date().toISOString().slice(0, 10);
+            const tagName  = `lineage/main-${today}-${shortSha}`;
+
+            // ── Default outputs (must be set before any early return) ────────
+            core.setOutput('is_revert', 'false');
+
+            // Skip initial branch creation (no parent commit)
+            if (before === '0000000000000000000000000000000000000000') {
+              core.notice('Initial push — skipping release.');
+              return;
+            }
+
+            // ── Idempotency: skip if release already exists (safe re-runs) ───
+            try {
+              await github.rest.repos.getReleaseByTag({ ...repo, tag: tagName });
+              core.notice(`Release ${tagName} already exists — skipping (idempotent re-run).`);
+              return;
+            } catch (e) {
+              if (e.status !== 404) core.warning(`Unexpected error checking release: ${e.message}`);
+              // 404 = release does not exist — proceed
+            }
+
+            // ── 1. Commits introduced by this push ───────────────────────────
+            let commits = [];
+            let isForcePush = false;
+            try {
+              const { data } = await github.rest.repos.compareCommits({
+                ...repo, base: before, head: after,
+              });
+              commits = data.commits;
+              core.info(`Found ${commits.length} commit(s) in this push.`);
+            } catch (e) {
+              // Fails when before is not an ancestor of after (force-push rollback)
+              core.warning(`compareCommits failed (likely force-push rollback): ${e.message}`);
+              isForcePush = true;
+              commits = [{
+                sha: after,
+                commit: { message: context.payload.head_commit?.message ?? '(unknown)' },
+              }];
+            }
+
+            // ── 2. Rollback detection ────────────────────────────────────────
+            const hasRevertCommit = commits.some(c =>
+              c.commit.message.startsWith('Revert ')
+            );
+            const isRollback = hasRevertCommit || isForcePush;
+            core.setOutput('is_revert', isRollback ? 'true' : 'false');
+            if (isRollback) core.notice('Rollback detected — release will be marked as pre-release.');
+
+            // ── 3. The develop→main PR that triggered this push ──────────────
+            let mainPR = null;
+            try {
+              const { data: prs } = await github.rest.pulls.list({
+                ...repo, state: 'closed', base: 'main',
+                sort: 'updated', direction: 'desc', per_page: 10,
+              });
+              mainPR =
+                prs.find(pr => pr.merge_commit_sha === after) ??
+                prs.find(pr =>
+                  pr.merged_at &&
+                  (Date.now() - new Date(pr.merged_at).getTime()) < 5 * 60_000
+                );
+            } catch (e) {
+              core.warning(`PR list failed: ${e.message}`);
+            }
+
+            // ── 4a. Feature PRs from squash commit messages: "title (#N)" ────
+            const featurePRNums = new Set();
+            for (const commit of commits) {
+              for (const [, n] of commit.commit.message.matchAll(/\(#(\d+)\)/g)) {
+                featurePRNums.add(Number(n));
+              }
+            }
+            if (mainPR) featurePRNums.delete(mainPR.number);
+
+            // ── 4b. Fallback: GitHub commit→PR API for commits without (#N) ──
+            for (const commit of commits.filter(c => !c.commit.message.match(/\(#\d+\)/))) {
+              try {
+                const { data: assocPRs } =
+                  await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                    ...repo, commit_sha: commit.sha,
+                  });
+                for (const pr of assocPRs) {
+                  if (pr.base.ref !== 'main' && pr.number !== mainPR?.number) {
+                    featurePRNums.add(pr.number);
+                  }
+                }
+              } catch {}
+            }
+
+            // ── 5. Feature PR details ─────────────────────────────────────────
+            const featurePRs = [];
+            for (const num of featurePRNums) {
+              try {
+                const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: num });
+                featurePRs.push(pr);
+              } catch (e) {
+                core.warning(`PR #${num} fetch failed: ${e.message}`);
+              }
+            }
+
+            // ── 6. Build run URL for the develop→main PR ─────────────────────
+            let buildRunUrl = '';
+            if (mainPR?.head?.sha) {
+              try {
+                const { data: { workflow_runs } } =
+                  await github.rest.actions.listWorkflowRunsForRepo({
+                    ...repo, event: 'pull_request', per_page: 30,
+                  });
+                const run = workflow_runs.find(r => r.head_sha === mainPR.head.sha);
+                if (run) buildRunUrl = run.html_url;
+              } catch (e) {
+                core.warning(`Build run lookup failed: ${e.message}`);
+              }
+            }
+
+            // ── 7. Auto-generated release notes (GitHub native) ──────────────
+            // Generates a "What's Changed" section from PR titles merged since
+            // the previous lineage release — the same format used by GitHub's
+            // own repos (VS Code, Next.js, etc.).
+            let generatedNotes = '';
+            try {
+              const { data: prevReleases } = await github.rest.repos.listReleases({
+                ...repo, per_page: 10,
+              });
+              const prevRelease = prevReleases.find(r =>
+                r.tag_name.startsWith('lineage/main-') && r.tag_name !== tagName
+              );
+
+              const { data: generated } = await github.rest.repos.generateReleaseNotes({
+                ...repo,
+                tag_name: tagName,
+                target_commitish: after,
+                ...(prevRelease ? { previous_tag_name: prevRelease.tag_name } : {}),
+              });
+              generatedNotes = generated.body;
+            } catch (e) {
+              core.warning(`generateReleaseNotes failed: ${e.message}`);
+            }
+
+            // ── 8. Compose release body ───────────────────────────────────────
+            const lineage = [];
+            lineage.push('---');
+            lineage.push('');
+            lineage.push('## Lineage');
+            lineage.push('');
+
+            if (isRollback) {
+              lineage.push(`> **Rollback** — ${isForcePush ? 'Force-push (admin)' : 'Standard revert PR'}`);
+              lineage.push('');
+            }
+
+            if (mainPR) {
+              lineage.push(`**Merged via:** PR #${mainPR.number} — [${mainPR.title}](${mainPR.html_url})`);
+              lineage.push(`**Author:** @${mainPR.user.login} | **Merged:** ${mainPR.merged_at}`);
+            } else {
+              lineage.push('**Merged via:** direct push (no PR found)');
+            }
+
+            if (featurePRs.length) {
+              lineage.push('');
+              lineage.push('**Feature PRs in this deploy:**');
+              for (const pr of featurePRs) {
+                lineage.push(`- #${pr.number} [${pr.head.ref}] [${pr.title}](${pr.html_url}) — @${pr.user.login}`);
+              }
+            }
+
+            lineage.push('');
+            lineage.push(buildRunUrl
+              ? `**Build:** ${buildRunUrl}`
+              : '**Build:** (not found — run may have expired)'
+            );
+            lineage.push(`**Workflow run:** ${context.serverUrl}/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`);
+
+            const releaseBody = generatedNotes
+              ? `${generatedNotes}\n\n${lineage.join('\n')}`
+              : lineage.slice(2).join('\n'); // drop the '---' separator if no generated notes
+
+            // ── 9. Create the GitHub Release ─────────────────────────────────
+            const releaseName = isRollback
+              ? `Rollback: main@${shortSha}`
+              : `Deploy: main@${shortSha}`;
+
+            const { data: release } = await github.rest.repos.createRelease({
+              ...repo,
+              tag_name: tagName,
+              name: releaseName,
+              body: releaseBody,
+              target_commitish: after,
+              prerelease: isRollback,  // rollbacks don't surface as "latest release"
+              draft: false,
+            });
+
+            core.notice(`Release created: ${release.html_url}`);
+
+            await core.summary
+              .addHeading(releaseName)
+              .addLink('View Release', release.html_url)
+              .addCodeBlock(releaseBody, 'markdown')
+              .write();
+
+  # ── Notify open PRs when a rollback lands on main ──────────────────────────
+  notify-open-prs:
+    needs: create-release
+    if: needs.create-release.outputs.is_revert == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Comment on open PRs targeting main
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.SYNC_TOKEN }}
+          script: |
+            const { data: openPRs } = await github.rest.pulls.list({
+              ...context.repo, state: 'open', base: 'main', per_page: 100,
+            });
+
+            if (!openPRs.length) {
+              core.notice('No open PRs targeting main — nothing to notify.');
+              return;
+            }
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const body = [
+              '## ⚠️ Rollback landed on `main`',
+              '',
+              'A revert or force-push rollback was just applied to `main`. Your build result for this PR is now **stale**.',
+              '',
+              '**What this means:** The `build` status check passed against a version of `main` that no longer exists. With strict status checks enabled, this PR cannot be merged until the build passes against the current `main`.',
+              '',
+              '**Action required:**',
+              '1. Rebase this branch: `git fetch origin && git rebase origin/main`',
+              '2. Push to trigger a new build.',
+              '3. Re-request review if approvals were dismissed.',
+              '',
+              `_Rollback detected by [workflow run ${context.runId}](${runUrl})_`,
+            ].join('\n');
+
+            for (const pr of openPRs) {
+              try {
+                await github.rest.issues.createComment({
+                  ...context.repo, issue_number: pr.number, body,
+                });
+                core.info(`Notified PR #${pr.number}: ${pr.title}`);
+              } catch (e) {
+                core.warning(`Failed to comment on PR #${pr.number}: ${e.message}`);
+              }
+            }
+
+            core.notice(`Notified ${openPRs.length} open PR(s) of rollback.`);
