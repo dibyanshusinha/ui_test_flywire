@@ -3,6 +3,7 @@ name: Sync develop to main
 on:
   push:
     branches: [main]
+  workflow_dispatch: # allows manual trigger to resync develop when needed
 
 permissions:
   contents: write
@@ -44,6 +45,9 @@ jobs:
       # This step is best-effort: failures log a warning but never block Step 3.
       - name: Rescue orphaned develop commits
         if: steps.check_ahead.outputs.develop_is_ahead == 'true'
+        continue-on-error: true # best-effort — never block Step 3
+        env:
+          TRIGGER_MSG: ${{ github.event.head_commit.message }} # safe: avoids inline shell injection
         run: |
           DEVELOP_SHA="${{ steps.check_ahead.outputs.develop_sha }}"
           MAIN_SHA="${{ github.sha }}"
@@ -51,7 +55,6 @@ jobs:
           RESCUE_DATE=$(date -u +%Y-%m-%d)
           TAG_NAME="rescue/develop-${RESCUE_DATE}-${SHORT_SHA}"
           TAGGER_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          TRIGGER_MSG="${{ github.event.head_commit.message }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           TAG_MESSAGE="RESCUED: develop was ahead of main before sync\n\ndevelop SHA:  ${DEVELOP_SHA}\nmain SHA:     ${MAIN_SHA}\nRescue date:  ${RESCUE_DATE}\nTriggered by: ${TRIGGER_MSG}\nWorkflow run: ${RUN_URL}\n\nThese commits were about to be orphaned by sync-develop.yml.\nRecover them: git fetch origin && git checkout ${TAG_NAME}"
@@ -120,6 +123,7 @@ jobs:
 
       # ── Step 3: Force-reset develop to match main (always runs) ──────────
       - name: Reset develop to main
+        if: always() # runs even if Step 1 or Step 2 failed
         run: |
           RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
             -H "Authorization: Bearer ${{ secrets.SYNC_TOKEN }}" \
