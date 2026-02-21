@@ -39,12 +39,14 @@ jobs:
         run: npm ci
 
       # Enforce conventional commits on the PR title.
-      # GitHub uses the PR title as the squash commit message, so this gates
-      # what lands in the commit history (feat/fix/chore/etc. prefixes required).
+      # Only runs for feature→develop PRs (base == develop), where the title
+      # becomes the squash commit message that lands in git history.
+      # Skipped for develop→main PRs: rebase merge preserves individual commit
+      # messages; the PR title is never written to git history.
       # The title is passed via an env var to avoid shell injection from
       # special characters (backticks, $, quotes) in PR titles.
       - name: Lint PR title (conventional commits)
-        if: github.event_name == 'pull_request'
+        if: github.base_ref == 'develop'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: printf '%s\n' "$PR_TITLE" | npx commitlint
