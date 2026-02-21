@@ -1,0 +1,64 @@
+name: Restore develop branch
+
+# Safety net: if the develop branch is ever deleted (e.g. someone enables
+# "Automatically delete head branches" in repo settings, or an admin bypasses
+# the deletion protection), this workflow immediately recreates it from the
+# current main HEAD.
+#
+# The protect-develop-deletion ruleset (bypass_actors: []) prevents deletion
+# in normal operation. This workflow handles the edge case where the deletion
+# somehow slips through (e.g., before the ruleset is applied in GitHub UI).
+
+on:
+  delete:
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: github.event.ref == 'develop' && github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Recreate develop from main
+        run: |
+          echo "⚠️  develop branch was deleted — restoring from main"
+
+          # Get current main HEAD SHA
+          MAIN_SHA=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.SYNC_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/git/refs/heads/main \
+            | jq -r '.object.sha')
+
+          if [ -z "$MAIN_SHA" ] || [ "$MAIN_SHA" = "null" ]; then
+            echo "::error::Could not read main SHA — cannot restore develop"
+            exit 1
+          fi
+
+          echo "Restoring develop at main HEAD: $MAIN_SHA"
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${{ secrets.SYNC_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/${{ github.repository }}/git/refs \
+            -d "{\"ref\": \"refs/heads/develop\", \"sha\": \"$MAIN_SHA\"}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+          echo "HTTP $HTTP_CODE: $BODY"
+          [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ] || exit 1
+
+          echo "✓ develop branch restored at $MAIN_SHA"
+
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          ## ⚠️ develop branch was deleted and automatically restored
+
+          **Restored at:** \`$MAIN_SHA\` (current main HEAD)
+          **Triggered by:** deletion event
+
+          Investigate why the branch was deleted and apply the \`protect-develop-deletion\`
+          ruleset in GitHub Settings → Rules → Rulesets to prevent recurrence.
+          EOF

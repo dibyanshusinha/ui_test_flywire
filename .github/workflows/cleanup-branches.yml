@@ -1,0 +1,50 @@
+name: Cleanup merged branches
+
+# Deletes the head branch of a merged PR — but ONLY for short-lived feature
+# branches (feature/*, fix/*, chore/*, etc.).
+#
+# Why a workflow instead of "Automatically delete head branches" in Settings:
+# The GitHub setting deletes ALL head branches indiscriminately, including
+# long-lived branches like develop. This workflow explicitly protects
+# develop, main, and release/* from deletion.
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  delete-branch:
+    # Conditions:
+    #   1. PR was merged (not just closed/abandoned)
+    #   2. Head branch is NOT a long-lived protected branch
+    if: |
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref != 'develop' &&
+      github.event.pull_request.head.ref != 'main' &&
+      !startsWith(github.event.pull_request.head.ref, 'release/')
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Delete merged branch
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+            try {
+              await github.rest.git.deleteRef({
+                ...context.repo,
+                ref: `heads/${branch}`,
+              });
+              core.notice(`Deleted merged branch: ${branch}`);
+            } catch (e) {
+              if (e.status === 422) {
+                core.notice(`Branch ${branch} was already deleted.`);
+              } else {
+                // Non-fatal: log and continue. Branch can be cleaned up manually.
+                core.warning(`Could not delete branch ${branch}: ${e.message}`);
+              }
+            }
