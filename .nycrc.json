@@ -4,5 +4,9 @@
   "exclude": ["src/main.jsx", "**/*.test.jsx", "**/*.test.js"],
   "reporter": ["html", "text", "text-summary", "lcov"],
   "report-dir": "./coverage/e2e",
-  "temp-dir": "./.nyc_output"
+  "temp-dir": "./.nyc_output",
+  "branches": 70,
+  "lines": 70,
+  "functions": 70,
+  "statements": 70
 }
