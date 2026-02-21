@@ -25,6 +25,12 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
       exclude: ['node_modules/', 'tests/', '*.config.*', 'src/main.jsx'],
+      thresholds: {
+        lines: 70,
+        functions: 70,
+        branches: 70,
+        statements: 70,
+      },
     },
   },
 })

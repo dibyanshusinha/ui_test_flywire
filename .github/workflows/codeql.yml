@@ -1,0 +1,51 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+      - develop
+  schedule:
+    # Weekly scan every Monday at 08:00 UTC (before Dependabot runs at 09:00)
+    - cron: '0 8 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+  # Required for private repos to surface alerts in the Security tab
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - javascript-typescript
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Use the default CodeQL query suite (security-and-quality).
+          # Override with 'security-extended' for stricter checks.
+          queries: security-and-quality
+
+      # CodeQL auto-builds JavaScript/TypeScript — no manual build step needed.
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:${{ matrix.language }}'
